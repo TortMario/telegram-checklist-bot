@@ -1,0 +1,54 @@
+name: Daily Telegram Reminders
+
+on:
+  schedule:
+    # 8:00 AM Singapore Time (00:00 UTC)
+    - cron: '0 0 * * *'
+    # 7:00 PM Singapore Time (11:00 UTC) 
+    - cron: '0 11 * * *'
+  
+  # Allow manual triggering for testing
+  workflow_dispatch:
+    inputs:
+      test_run:
+        description: 'Test run (will not send actual notifications)'
+        required: false
+        default: 'false'
+
+jobs:
+  send-reminders:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Send Daily Reminders
+      run: |
+        echo "Triggering daily reminders at $(date)"
+        
+        # Make HTTP request to your Vercel endpoint
+        response=$(curl -s -w "%{http_code}" -X POST \
+          "${{ secrets.VERCEL_APP_URL }}/api/daily-reminder" \
+          -H "Content-Type: application/json" \
+          -H "User-Agent: GitHub-Actions-Daily-Reminder" \
+          -d '{"source": "github-actions", "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"}')
+        
+        # Extract status code and response body
+        status_code="${response: -3}"
+        body="${response%???}"
+        
+        echo "Response Status: $status_code"
+        echo "Response Body: $body"
+        
+        # Check if request was successful
+        if [ "$status_code" = "200" ]; then
+          echo "✅ Daily reminders sent successfully"
+        else
+          echo "❌ Failed to send daily reminders"
+          exit 1
+        fi
+    
+    - name: Log Completion
+      run: |
+        echo "Daily reminder job completed at $(date)"
+        echo "Next scheduled runs:"
+        echo "- 8:00 AM SGT (00:00 UTC daily)"
+        echo "- 7:00 PM SGT (11:00 UTC daily)"

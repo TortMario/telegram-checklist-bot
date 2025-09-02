@@ -1,0 +1,11 @@
+{
+  "functions": {
+    "api/webhook.py": {
+      "runtime": "python3.9"
+    }
+  },
+  "env": {
+    "TELEGRAM_BOT_TOKEN": "@telegram_bot_token",
+    "GROQ_API_KEY": "@groq_api_key"
+  }
+}
