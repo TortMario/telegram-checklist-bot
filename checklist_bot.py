@@ -149,23 +149,23 @@ class ChecklistBot:
 
     def analyze_with_ai(self, message_text):
         """Use AI to analyze message for summary and deadlines"""
-        prompt = f"""Analyze this message and extract:
-1. Brief summary (1-2 sentences)
-2. Any specific dates, deadlines, or time-sensitive information
-3. Action items or tasks that need to be done
+        prompt = f"""Проанализируй это сообщение и извлеки:
+1. Краткое содержание (1-2 предложения)
+2. Любые конкретные даты, сроки или важную по времени информацию
+3. Задачи или пункты, которые нужно выполнить
 
-Format your response exactly as:
-SUMMARY: [brief summary]
-DEADLINE: [specific date/time or "None"]
-ACTIONS: [comma-separated list of tasks or "None"]
+Отформатируй свой ответ точно так:
+SUMMARY: [краткое содержание]
+DEADLINE: [конкретная дата/время или "Нет"]
+ACTIONS: [список задач через запятую или "Нет"]
 
-Message: {message_text}"""
+Сообщение: {message_text}"""
 
         try:
             response = self.groq_client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant that extracts key information from messages. Be specific with dates and concise with summaries."},
+                    {"role": "system", "content": "Ты — полезный ассистент, который извлекает ключевую информацию из сообщений. Указывай точные даты и будь краток в содержании."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=200,
@@ -174,7 +174,7 @@ Message: {message_text}"""
             return response.choices[0].message.content.strip()
         except Exception as e:
             logging.error(f"AI analysis error: {e}")
-            return "❌ Could not analyze message"
+            return "❌ Не удалось проанализировать сообщение"
 
     def add_to_checklist(self, chat_id, summary, deadline, actions):
         """Add items to checklist"""
@@ -204,22 +204,22 @@ Message: {message_text}"""
         expired_count = self.clean_expired_items(chat_id)
         
         if str(chat_id) not in self.checklist or not self.checklist[str(chat_id)]:
-            msg = "📝 Your checklist is empty!"
+            msg = "📝 Ваш список задач пуст!"
             if expired_count > 0:
-                msg += f"\n\n🗑️ Removed {expired_count} expired items"
+                msg += f"\n\n🗑️ Удалено {expired_count} просроченных задач"
             return msg
         
         items = self.checklist[str(chat_id)]
         if not items:
-            msg = "📝 Your checklist is empty!"
+            msg = "📝 Ваш список задач пуст!"
             if expired_count > 0:
-                msg += f"\n\n🗑️ Removed {expired_count} expired items"
+                msg += f"\n\n🗑️ Удалено {expired_count} просроченных задач"
             return msg
         
-        response = "📋 <b>Your Checklist:</b>\n\n"
+        response = "📋 <b>Ваш список задач:</b>\n\n"
         
         if expired_count > 0:
-            response += f"🗑️ <i>Removed {expired_count} expired items</i>\n\n"
+            response += f"🗑️ <i>Удалено {expired_count} просроченных задач</i>\n\n"
         
         for item_id, item in items.items():
             status = "✅" if item['completed'] else "⏳"
@@ -228,18 +228,18 @@ Message: {message_text}"""
             response += f"{status} <b>{summary}</b>\n"
             
             if item['deadline'] and item['deadline'].lower() != 'none':
-                response += f"   ⏰ Deadline: {item['deadline']}\n"
+                response += f"   ⏰ Срок: {item['deadline']}\n"
             
             if item['actions'] and item['actions'].lower() != 'none':
-                response += f"   📝 Actions: {item['actions']}\n"
+                response += f"   📝 Действия: {item['actions']}\n"
             
             response += f"   🆔 ID: <code>{item_id[-6:]}</code>\n\n"  # Show last 6 digits
         
-        response += "\n<b>Commands:</b>\n"
-        response += "• <code>/checklist</code> - View checklist\n"
-        response += "• <code>/complete [ID]</code> - Mark as complete\n"
-        response += "• <code>/delete [ID]</code> - Remove item\n"
-        response += "• <code>/clear</code> - Clear all completed items"
+        response += "\n<b>Команды:</b>\n"
+        response += "• <code>/checklist</code> - Показать список\n"
+        response += "• <code>/complete [ID]</code> - Отметить как выполненное\n"
+        response += "• <code>/delete [ID]</code> - Удалить задачу\n"
+        response += "• <code>/clear</code> - Удалить все выполненные"
         
         return response
 
@@ -249,18 +249,18 @@ Message: {message_text}"""
         cmd = cmd_parts[0].lower()
         
         if cmd == '/start':
-            welcome = "🤖 <b>Welcome to AI Checklist Bot!</b>\n\n"
-            welcome += "Forward me any message and I'll:\n"
-            welcome += "• Summarize it\n"
-            welcome += "• Extract deadlines\n"
-            welcome += "• Find action items\n"
-            welcome += "• Add them to your checklist\n"
-            welcome += "• Auto-remove expired items\n\n"
-            welcome += "<b>Commands:</b>\n"
-            welcome += "• /checklist - View your tasks\n"
-            welcome += "• /complete [ID] - Mark task done\n"
-            welcome += "• /delete [ID] - Remove task\n"
-            welcome += "• /clear - Remove completed items"
+            welcome = "🤖 <b>Добро пожаловать в AI Checklist Bot!</b>\n\n"
+            welcome += "Перешлите мне любое сообщение, и я:\n"
+            welcome += "• Сделаю краткое содержание\n"
+            welcome += "• Извлеку сроки выполнения\n"
+            welcome += "• Найду задачи для выполнения\n"
+            welcome += "• Добавлю их в ваш список задач\n"
+            welcome += "• Автоматически удалю просроченные задачи\n\n"
+            welcome += "<b>Команды:</b>\n"
+            welcome += "• /checklist - Показать список\n"
+            welcome += "• /complete [ID] - Отметить как выполненное\n"
+            welcome += "• /delete [ID] - Удалить задачу\n"
+            welcome += "• /clear - Удалить все выполненные"
             self.send_message(chat_id, welcome)
             
         elif cmd == '/checklist':
@@ -276,12 +276,12 @@ Message: {message_text}"""
                     if full_id.endswith(item_id_partial):
                         self.checklist[str(chat_id)][full_id]['completed'] = True
                         self.save_checklist()
-                        self.send_message(chat_id, "✅ Task marked as complete!")
+                        self.send_message(chat_id, "✅ Задача отмечена как выполненная!")
                         found = True
                         break
             
             if not found:
-                self.send_message(chat_id, "❌ Task ID not found.")
+                self.send_message(chat_id, "❌ Задача с таким ID не найдена.")
                 
         elif cmd == '/delete' and len(cmd_parts) > 1:
             item_id_partial = cmd_parts[1]
@@ -292,12 +292,12 @@ Message: {message_text}"""
                     if full_id.endswith(item_id_partial):
                         del self.checklist[str(chat_id)][full_id]
                         self.save_checklist()
-                        self.send_message(chat_id, "🗑️ Task deleted!")
+                        self.send_message(chat_id, "🗑️ Задача удалена!")
                         found = True
                         break
             
             if not found:
-                self.send_message(chat_id, "❌ Task ID not found.")
+                self.send_message(chat_id, "❌ Задача с таким ID не найдена.")
                 
         elif cmd == '/clear':
             if str(chat_id) in self.checklist:
@@ -313,12 +313,12 @@ Message: {message_text}"""
                     del self.checklist[str(chat_id)][item_id]
                 
                 self.save_checklist()
-                self.send_message(chat_id, f"🗑️ Cleared {completed_count} completed tasks!")
+                self.send_message(chat_id, f"🗑️ Очищено {completed_count} выполненных задач!")
             else:
-                self.send_message(chat_id, "No tasks to clear.")
+                self.send_message(chat_id, "Нет задач для очистки.")
                 
         else:
-            self.send_message(chat_id, "Unknown command. Use /start for help.")
+            self.send_message(chat_id, "Неизвестная команда. Используйте /start для помощи.")
 
     def handle_message(self, message):
         """Process incoming message"""
@@ -332,12 +332,12 @@ Message: {message_text}"""
             
         # Get forwarded message text or regular text
         if 'forward_date' in message:
-            message_text = f"[FORWARDED] {text}"
+            message_text = f"[ПЕРЕСЛАНО] {text}"
         else:
             message_text = text
 
         if not message_text.strip():
-            self.send_message(chat_id, "Please send a message with text to analyze.")
+            self.send_message(chat_id, "Пожалуйста, отправьте сообщение с текстом для анализа.")
             return
 
         # Send typing indicator
@@ -348,9 +348,9 @@ Message: {message_text}"""
         analysis = self.analyze_with_ai(message_text)
         
         # Parse analysis
-        summary = "No summary"
-        deadline = "None"
-        actions = "None"
+        summary = "Нет содержания"
+        deadline = "Нет"
+        actions = "Нет"
         
         lines = analysis.split('\n')
         for line in lines:
@@ -363,24 +363,24 @@ Message: {message_text}"""
         
         # Add to checklist if there are actions or deadlines
         added_to_checklist = False
-        if (actions and actions.lower() != 'none') or (deadline and deadline.lower() != 'none'):
+        if (actions and actions.lower() != 'нет') or (deadline and deadline.lower() != 'нет'):
             item_id = self.add_to_checklist(chat_id, summary, deadline, actions)
             added_to_checklist = True
         
         # Send result
-        response = f"🤖 <b>AI Analysis</b>\n\n"
-        response += f"📝 <b>Summary:</b> {summary}\n"
+        response = f"🤖 <b>Анализ ИИ</b>\n\n"
+        response += f"📝 <b>Содержание:</b> {summary}\n"
         
-        if deadline and deadline.lower() != 'none':
-            response += f"⏰ <b>Deadline:</b> {deadline}\n"
+        if deadline and deadline.lower() != 'нет':
+            response += f"⏰ <b>Срок:</b> {deadline}\n"
         
-        if actions and actions.lower() != 'none':
-            response += f"📋 <b>Actions:</b> {actions}\n"
+        if actions and actions.lower() != 'нет':
+            response += f"📋 <b>Действия:</b> {actions}\n"
         
         if added_to_checklist:
-            response += f"\n✅ <b>Added to checklist!</b> Use /checklist to view all items."
+            response += f"\n✅ <b>Добавлено в список задач!</b> Используйте /checklist, чтобы посмотреть все задачи."
         else:
-            response += f"\n💡 <i>No actionable items found to add to checklist.</i>"
+            response += f"\n💡 <i>Не найдено задач для добавления в список.</i>"
         
         self.send_message(chat_id, response)
         
@@ -388,10 +388,10 @@ Message: {message_text}"""
 
     def run(self):
         """Start the bot"""
-        print("🚀 AI Checklist Bot started!")
-        print("Forward messages to analyze and add to checklist.")
-        print("Expired items are automatically removed.")
-        print("Press Ctrl+C to stop\n")
+        print("🚀 AI Checklist Bot запущен!")
+        print("Пересылайте сообщения для анализа и добавления в список задач.")
+        print("Просроченные задачи удаляются автоматически.")
+        print("Нажмите Ctrl+C, чтобы остановить\n")
 
         while True:
             try:
@@ -407,10 +407,10 @@ Message: {message_text}"""
                 time.sleep(1)
 
             except KeyboardInterrupt:
-                print("\n👋 Bot stopped")
+                print("\n👋 Бот остановлен")
                 break
             except Exception as e:
-                logging.error(f"Main loop error: {e}")
+                logging.error(f"Ошибка в главном цикле: {e}")
                 time.sleep(5)
 
 def main():
@@ -419,8 +419,8 @@ def main():
     groq_api_key = os.getenv('GROQ_API_KEY')
 
     if not telegram_token or not groq_api_key:
-        print("❌ Missing API keys! Check your .env file.")
-        print("Need: TELEGRAM_BOT_TOKEN and GROQ_API_KEY")
+        print("❌ Отсутствуют ключи API! Проверьте ваш .env файл.")
+        print("Необходимы: TELEGRAM_BOT_TOKEN и GROQ_API_KEY")
         return
 
     # Start bot
