@@ -14,44 +14,65 @@ load_dotenv()
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+import redis
+
 class ChecklistBot:
     def __init__(self, telegram_token, groq_api_key):
         self.token = telegram_token
         self.base_url = f'https://api.telegram.org/bot{telegram_token}'
         self.groq_client = Groq(api_key=groq_api_key)
         self.offset = 0
-        self.checklist_file = 'data/checklist.json'
-        self.load_checklist()
 
-    def load_checklist(self):
-        """Load checklist from file"""
+        # Set up Redis connection
+        redis_url = os.getenv('REDIS_URL')
+        if redis_url:
+            self.redis_client = redis.from_url(redis_url)
+        else:
+            self.redis_client = None
+            logging.warning("REDIS_URL not found. Database functionality will be disabled.")
+
+    def set_user_state(self, chat_id, state):
+        if not self.redis_client: return
+        self.redis_client.set(f"state:{chat_id}", state, ex=600)
+
+    def get_user_state(self, chat_id):
+        if not self.redis_client: return None
+        state_bytes = self.redis_client.get(f"state:{chat_id}")
+        if state_bytes:
+            return state_bytes.decode('utf-8')
+        return None
+
+    def clear_user_state(self, chat_id):
+        if not self.redis_client: return
+        self.redis_client.delete(f"state:{chat_id}")
+
+    def load_checklist(self, chat_id):
+        """Load checklist from Redis"""
+        if not self.redis_client:
+            return {}
         try:
-            if os.path.exists(self.checklist_file):
-                with open(self.checklist_file, 'r', encoding='utf-8') as f:
-                    self.checklist = json.load(f)
-            else:
-                self.checklist = {}
+            data = self.redis_client.get(f"checklist:{chat_id}")
+            if data:
+                return json.loads(data)
         except Exception as e:
-            logging.error(f"Error loading checklist: {e}")
-            self.checklist = {}
+            logging.error(f"Error loading checklist from Redis for chat {chat_id}: {e}")
+        return {}
 
-    def save_checklist(self):
-        """Save checklist to file"""
+    def save_checklist(self, chat_id, checklist):
+        """Save checklist to Redis"""
+        if not self.redis_client:
+            return
         try:
-            with open(self.checklist_file, 'w', encoding='utf-8') as f:
-                json.dump(self.checklist, f, ensure_ascii=False, indent=2)
+            self.redis_client.set(f"checklist:{chat_id}", json.dumps(checklist, ensure_ascii=False))
         except Exception as e:
-            logging.error(f"Error saving checklist: {e}")
+            logging.error(f"Error saving checklist to Redis for chat {chat_id}: {e}")
 
-    def clean_expired_items(self, chat_id):
-        """Remove items with past deadlines"""
-        if str(chat_id) not in self.checklist:
-            return 0
-        
+    def clean_expired_items(self, checklist):
+        """Remove items with past deadlines from a checklist dictionary"""
         current_time = datetime.now()
         items_to_remove = []
         
-        for item_id, item in self.checklist[str(chat_id)].items():
+        for item_id, item in checklist.items():
             if item.get('deadline_date'):
                 try:
                     deadline = datetime.fromisoformat(item['deadline_date'])
@@ -61,17 +82,13 @@ class ChecklistBot:
                     pass
         
         for item_id in items_to_remove:
-            del self.checklist[str(chat_id)][item_id]
-        
-        if items_to_remove:
-            self.save_checklist()
-            logging.info(f"Removed {len(items_to_remove)} expired items for chat {chat_id}")
+            checklist.pop(item_id, None)
         
         return len(items_to_remove)
 
     def parse_date(self, date_str):
         """Parse date from various formats"""
-        if not date_str or date_str.lower() == 'none':
+        if not date_str or date_str.lower() == 'нет':
             return None
         
         current_date = datetime.now()
@@ -147,45 +164,34 @@ class ChecklistBot:
             logging.error(f"Error getting updates: {e}")
             return None
 
-    def analyze_with_ai(self, message_text):
-        """Use AI to analyze message for summary and deadlines"""
-        prompt = f"""Проанализируй это сообщение и извлеки:
-1. Краткое содержание (1-2 предложения)
-2. Любые конкретные даты, сроки или важную по времени информацию
-3. Задачи или пункты, которые нужно выполнить
-
-Отформатируй свой ответ точно так:
-SUMMARY: [краткое содержание]
-DEADLINE: [конкретная дата/время или "Нет"]
-ACTIONS: [список задач через запятую или "Нет"]
-
-Сообщение: {message_text}"""
-
+    def analyze_with_ai(self, message_text, prompt_template):
+        """General purpose AI analysis method."""
+        prompt = prompt_template.replace("[вставь свою]", message_text)
         try:
             response = self.groq_client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
-                    {"role": "system", "content": "Ты — полезный ассистент, который извлекает ключевую информацию из сообщений. Указывай точные даты и будь краток в содержании."},
+                    {"role": "system", "content": "Ты — полезный ассистент, который извлекает ключевую информацию из сообщений или выполняет задачи по шаблону."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=200,
+                max_tokens=1024, # Increased for potentially longer simplification steps
                 temperature=0.3
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
             logging.error(f"AI analysis error: {e}")
-            return "❌ Не удалось проанализировать сообщение"
+            return "❌ Ошибка при обращении к ИИ"
 
-    def add_to_checklist(self, chat_id, summary, deadline, actions):
-        """Add items to checklist"""
-        if str(chat_id) not in self.checklist:
-            self.checklist[str(chat_id)] = {}
-        
-        # Parse deadline
+    def simplify_task(self, task_text):
+        """Calls AI to simplify a task into steps."""
+        prompt_template = "Вот задача: [вставь свою].\nРазбей её на шаги по 3–5 минут, с чётким началом и понятным концом.\nДобавь критерии, по которым я пойму, что шаг завершён."
+        return self.analyze_with_ai(task_text, prompt_template)
+
+    def add_to_checklist(self, checklist, summary, deadline, actions):
+        """Add items to a checklist dictionary"""
         deadline_date = self.parse_date(deadline) if deadline else None
+        item_id = str(int(time.time() * 1000))
         
-        # Create item
-        item_id = str(int(time.time() * 1000))  # More unique ID
         item = {
             'summary': summary,
             'deadline': deadline,
@@ -195,56 +201,53 @@ ACTIONS: [список задач через запятую или "Нет"]
             'created_at': datetime.now().isoformat()
         }
         
-        self.checklist[str(chat_id)][item_id] = item
-        self.save_checklist()
+        checklist[item_id] = item
         return item_id
-        
+
     def get_checklist_display(self, chat_id):
-        """Get formatted checklist for display"""
-        expired_count = self.clean_expired_items(chat_id)
-        
-        if str(chat_id) not in self.checklist or not self.checklist[str(chat_id)]:
-            msg = "📝 Ваш список задач пуст!"
-            if expired_count > 0:
-                msg += f"\n\n🗑️ Удалено {expired_count} просроченных задач"
-            return msg
-        
-        items = self.checklist[str(chat_id)]
-        if not items:
+        """Load, clean, and format checklist for display"""
+        checklist = self.load_checklist(chat_id)
+        expired_count = self.clean_expired_items(checklist)
+
+        if expired_count > 0:
+            self.save_checklist(chat_id, checklist)
+
+        if not checklist:
             msg = "📝 Ваш список задач пуст!"
             if expired_count > 0:
                 msg += f"\n\n🗑️ Удалено {expired_count} просроченных задач"
             return msg
         
         response = "📋 <b>Ваш список задач:</b>\n\n"
-        
         if expired_count > 0:
             response += f"🗑️ <i>Удалено {expired_count} просроченных задач</i>\n\n"
         
-        for item_id, item in items.items():
-            status = "✅" if item['completed'] else "⏳"
-            summary = item['summary'][:50] + "..." if len(item['summary']) > 50 else item['summary']
+        for item_id, item in checklist.items():
+            status = "✅" if item.get('completed') else "⏳"
+            summary = item.get('summary', 'Без названия')
+            summary_short = summary[:50] + "..." if len(summary) > 50 else summary
             
-            response += f"{status} <b>{summary}</b>\n"
+            response += f"{status} <b>{summary_short}</b>\n"
             
-            if item['deadline'] and item['deadline'].lower() != 'none':
+            if item.get('deadline') and item['deadline'].lower() != 'нет':
                 response += f"   ⏰ Срок: {item['deadline']}\n"
             
-            if item['actions'] and item['actions'].lower() != 'none':
+            if item.get('actions') and item['actions'].lower() != 'нет':
                 response += f"   📝 Действия: {item['actions']}\n"
             
-            response += f"   🆔 ID: <code>{item_id[-6:]}</code>\n\n"  # Show last 6 digits
+            response += f"   🆔 ID: <code>{item_id[-6:]}</code>\n\n"
         
         response += "\n<b>Команды:</b>\n"
         response += "• <code>/checklist</code> - Показать список\n"
         response += "• <code>/complete [ID]</code> - Отметить как выполненное\n"
         response += "• <code>/delete [ID]</code> - Удалить задачу\n"
-        response += "• <code>/clear</code> - Удалить все выполненные"
+        response += "• <code>/clear</code> - Удалить все выполненные\n"
+        response += "• <code>/simplify</code> - Упростить задачу"
         
         return response
 
     def handle_command(self, chat_id, command):
-        """Handle bot commands"""
+        """Handle bot commands by loading, modifying, and saving the checklist."""
         cmd_parts = command.split()
         cmd = cmd_parts[0].lower()
         
@@ -260,77 +263,93 @@ ACTIONS: [список задач через запятую или "Нет"]
             welcome += "• /checklist - Показать список\n"
             welcome += "• /complete [ID] - Отметить как выполненное\n"
             welcome += "• /delete [ID] - Удалить задачу\n"
-            welcome += "• /clear - Удалить все выполненные"
+            welcome += "• /clear - Удалить все выполненные\n"
+            welcome += "• /simplify - Упростить задачу"
             self.send_message(chat_id, welcome)
+            return
             
         elif cmd == '/checklist':
-            checklist = self.get_checklist_display(chat_id)
-            self.send_message(chat_id, checklist)
+            checklist_display = self.get_checklist_display(chat_id)
+            self.send_message(chat_id, checklist_display)
+            return
+
+        elif cmd == '/simplify':
+            self.set_user_state(chat_id, "awaiting_simplify_task")
+            self.send_message(chat_id, "Пожалуйста, введите задачу, которую вы хотите упростить.")
+            return
+
+        checklist = self.load_checklist(chat_id)
+        response_message = "❌ Неизвестная ошибка"
             
-        elif cmd == '/complete' and len(cmd_parts) > 1:
+        if cmd == '/complete' and len(cmd_parts) > 1:
             item_id_partial = cmd_parts[1]
             found = False
-            
-            if str(chat_id) in self.checklist:
-                for full_id, item in self.checklist[str(chat_id)].items():
-                    if full_id.endswith(item_id_partial):
-                        self.checklist[str(chat_id)][full_id]['completed'] = True
-                        self.save_checklist()
-                        self.send_message(chat_id, "✅ Задача отмечена как выполненная!")
-                        found = True
-                        break
-            
-            if not found:
-                self.send_message(chat_id, "❌ Задача с таким ID не найдена.")
+            for full_id in checklist:
+                if full_id.endswith(item_id_partial):
+                    checklist[full_id]['completed'] = True
+                    found = True
+                    break
+            response_message = "✅ Задача отмечена как выполненная!" if found else "❌ Задача с таким ID не найдена."
                 
         elif cmd == '/delete' and len(cmd_parts) > 1:
             item_id_partial = cmd_parts[1]
             found = False
-            
-            if str(chat_id) in self.checklist:
-                for full_id in list(self.checklist[str(chat_id)].keys()):
-                    if full_id.endswith(item_id_partial):
-                        del self.checklist[str(chat_id)][full_id]
-                        self.save_checklist()
-                        self.send_message(chat_id, "🗑️ Задача удалена!")
-                        found = True
-                        break
-            
-            if not found:
-                self.send_message(chat_id, "❌ Задача с таким ID не найдена.")
+            for full_id in list(checklist.keys()):
+                if full_id.endswith(item_id_partial):
+                    checklist.pop(full_id, None)
+                    found = True
+                    break
+            response_message = "🗑️ Задача удалена!" if found else "❌ Задача с таким ID не найдена."
                 
         elif cmd == '/clear':
-            if str(chat_id) in self.checklist:
-                completed_count = 0
-                items_to_remove = []
-                
-                for item_id, item in self.checklist[str(chat_id)].items():
-                    if item.get('completed', False):
-                        items_to_remove.append(item_id)
-                        completed_count += 1
-                
-                for item_id in items_to_remove:
-                    del self.checklist[str(chat_id)][item_id]
-                
-                self.save_checklist()
-                self.send_message(chat_id, f"🗑️ Очищено {completed_count} выполненных задач!")
-            else:
-                self.send_message(chat_id, "Нет задач для очистки.")
+            items_to_remove = [item_id for item_id, item in checklist.items() if item.get('completed')]
+            for item_id in items_to_remove:
+                checklist.pop(item_id, None)
+            response_message = f"🗑️ Очищено {len(items_to_remove)} выполненных задач!"
                 
         else:
-            self.send_message(chat_id, "Неизвестная команда. Используйте /start для помощи.")
+            response_message = "Неизвестная команда. Используйте /start для помощи."
+
+        self.save_checklist(chat_id, checklist)
+        self.send_message(chat_id, response_message)
 
     def handle_message(self, message):
         """Process incoming message"""
         chat_id = message['chat']['id']
         text = message.get('text', '').strip()
-        
-        # Handle commands
+
+        if not text:
+            return
+
         if text.startswith('/'):
             self.handle_command(chat_id, text)
             return
+
+        user_state = self.get_user_state(chat_id)
+        if user_state == "awaiting_simplify_task":
+            self.send_message(chat_id, "⏳ Упрощаю задачу... Пожалуйста, подождите.")
+            simplified_steps_text = self.simplify_task(text)
+
+            # Parse the response and add to checklist
+            checklist = self.load_checklist(chat_id)
+            new_steps = [step.strip() for step in simplified_steps_text.split('\n') if step.strip()]
+
+            if not new_steps:
+                self.send_message(chat_id, "Не удалось разбить задачу на шаги. Попробуйте переформулировать.")
+                self.clear_user_state(chat_id)
+                return
+
+            for step_summary in new_steps:
+                self.add_to_checklist(checklist, step_summary, "Нет", "Нет")
+
+            self.save_checklist(chat_id, checklist)
+            self.clear_user_state(chat_id)
+
+            confirmation_message = "✅ Задача разбита на шаги и добавлена в ваш список!\n\n"
+            confirmation_message += self.get_checklist_display(chat_id)
+            self.send_message(chat_id, confirmation_message)
+            return
             
-        # Get forwarded message text or regular text
         if 'forward_date' in message:
             message_text = f"[ПЕРЕСЛАНО] {text}"
         else:
@@ -340,40 +359,37 @@ ACTIONS: [список задач через запятую или "Нет"]
             self.send_message(chat_id, "Пожалуйста, отправьте сообщение с текстом для анализа.")
             return
 
-        # Send typing indicator
-        requests.post(f"{self.base_url}/sendChatAction", 
-                     data={'chat_id': chat_id, 'action': 'typing'})
+        requests.post(f"{self.base_url}/sendChatAction", data={'chat_id': chat_id, 'action': 'typing'})
 
-        # Analyze message
-        analysis = self.analyze_with_ai(message_text)
+        original_prompt_template = """Проанализируй это сообщение и извлеки:
+1. Краткое содержание (1-2 предложения)
+2. Любые конкретные даты, сроки или важную по времени информацию
+3. Задачи или пункты, которые нужно выполнить
+
+Отформатируй свой ответ точно так:
+SUMMARY: [краткое содержание]
+DEADLINE: [конкретная дата/время или "Нет"]
+ACTIONS: [список задач через запятую или "Нет"]
+
+Сообщение: [вставь свою]"""
+        analysis = self.analyze_with_ai(message_text, original_prompt_template)
         
-        # Parse analysis
-        summary = "Нет содержания"
-        deadline = "Нет"
-        actions = "Нет"
+        summary, deadline, actions = "Нет содержания", "Нет", "Нет"
+        for line in analysis.split('\n'):
+            if line.startswith('SUMMARY:'): summary = line.replace('SUMMARY:', '').strip()
+            elif line.startswith('DEADLINE:'): deadline = line.replace('DEADLINE:', '').strip()
+            elif line.startswith('ACTIONS:'): actions = line.replace('ACTIONS:', '').strip()
         
-        lines = analysis.split('\n')
-        for line in lines:
-            if line.startswith('SUMMARY:'):
-                summary = line.replace('SUMMARY:', '').strip()
-            elif line.startswith('DEADLINE:'):
-                deadline = line.replace('DEADLINE:', '').strip()
-            elif line.startswith('ACTIONS:'):
-                actions = line.replace('ACTIONS:', '').strip()
-        
-        # Add to checklist if there are actions or deadlines
         added_to_checklist = False
         if (actions and actions.lower() != 'нет') or (deadline and deadline.lower() != 'нет'):
-            item_id = self.add_to_checklist(chat_id, summary, deadline, actions)
+            checklist = self.load_checklist(chat_id)
+            self.add_to_checklist(checklist, summary, deadline, actions)
+            self.save_checklist(chat_id, checklist)
             added_to_checklist = True
         
-        # Send result
-        response = f"🤖 <b>Анализ ИИ</b>\n\n"
-        response += f"📝 <b>Содержание:</b> {summary}\n"
-        
+        response = f"🤖 <b>Анализ ИИ</b>\n\n📝 <b>Содержание:</b> {summary}\n"
         if deadline and deadline.lower() != 'нет':
             response += f"⏰ <b>Срок:</b> {deadline}\n"
-        
         if actions and actions.lower() != 'нет':
             response += f"📋 <b>Действия:</b> {actions}\n"
         
@@ -383,8 +399,7 @@ ACTIONS: [список задач через запятую или "Нет"]
             response += f"\n💡 <i>Не найдено задач для добавления в список.</i>"
         
         self.send_message(chat_id, response)
-        
-        logging.info(f"Processed message from chat {chat_id}")
+        logging.info(f"Обработано сообщение от чата {chat_id}")
 
     def run(self):
         """Start the bot"""
@@ -396,16 +411,12 @@ ACTIONS: [список задач через запятую или "Нет"]
         while True:
             try:
                 updates = self.get_updates()
-                
                 if updates and updates.get('ok'):
                     for update in updates['result']:
                         self.offset = update['update_id'] + 1
-                        
                         if 'message' in update:
                             self.handle_message(update['message'])
-
                 time.sleep(1)
-
             except KeyboardInterrupt:
                 print("\n👋 Бот остановлен")
                 break
@@ -417,10 +428,16 @@ def main():
     # Get API keys from environment
     telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
     groq_api_key = os.getenv('GROQ_API_KEY')
+    redis_url = os.getenv('REDIS_URL')
 
     if not telegram_token or not groq_api_key:
         print("❌ Отсутствуют ключи API! Проверьте ваш .env файл.")
         print("Необходимы: TELEGRAM_BOT_TOKEN и GROQ_API_KEY")
+        return
+
+    if not redis_url:
+        print("❌ Отсутствует REDIS_URL! Локальная база данных не будет работать.")
+        print("Пожалуйста, настройте Redis и добавьте REDIS_URL в ваш .env файл.")
         return
 
     # Start bot

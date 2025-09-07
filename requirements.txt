@@ -2,3 +2,4 @@ requests
 groq>=0.4.0
 python-dotenv==1.0.0
 pytz
+redis==5.0.1
