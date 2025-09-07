@@ -43,18 +43,9 @@ class DailyReminderBot:
         
         if count == 0:
             return None
-
-        # Helper for Russian pluralization
-        def pluralize_tasks(n):
-            if n % 10 == 1 and n % 100 != 11:
-                return f"{n} задача"
-            elif 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
-                return f"{n} задачи"
-            else:
-                return f"{n} задач"
-
+            
         # Header
-        message = f"🔔 <b>Ежедневное напоминание</b> - {pluralize_tasks(count)} на сегодня:\n\n"
+        message = f"🔔 <b>Daily Reminder</b> - {count} task{'s' if count > 1 else ''} due today:\n\n"
         
         # List tasks
         for task in due_tasks:
@@ -63,15 +54,15 @@ class DailyReminderBot:
             
             message += f"{status} <b>{summary}</b>\n"
             
-            if task.get('deadline') and task['deadline'].lower() != 'нет':
-                message += f"   ⏰ Срок: {task['deadline']}\n"
+            if task.get('deadline') and task['deadline'].lower() != 'none':
+                message += f"   ⏰ Due: {task['deadline']}\n"
             
-            if task.get('actions') and task['actions'].lower() != 'нет':
-                message += f"   📝 Действия: {task['actions']}\n"
+            if task.get('actions') and task['actions'].lower() != 'none':
+                message += f"   📝 Actions: {task['actions']}\n"
             
             message += "\n"
         
-        message += "📋 Используйте /checklist для управления задачами."
+        message += "📋 Use /checklist to manage your tasks."
         return message
 
     def send_message(self, chat_id, text):
@@ -99,7 +90,7 @@ class DailyReminderBot:
         """Check all users and send reminders for due tasks"""
         try:
             singapore_date = self.get_singapore_date()
-            logging.info(f"Запуск ежедневной проверки напоминаний для {singapore_date}")
+            logging.info(f"Running daily reminder check for {singapore_date}")
             
             # Load all user checklists
             all_checklists = self.load_all_checklists()
@@ -123,25 +114,25 @@ class DailyReminderBot:
                             sent_count += 1
                             
                 except Exception as e:
-                    logging.error(f"Ошибка обработки напоминаний для чата {chat_id}: {e}")
+                    logging.error(f"Error processing reminders for chat {chat_id}: {e}")
                     continue
             
-            logging.info(f"Ежедневная проверка завершена: {sent_count}/{total_users} пользователей оповещено")
+            logging.info(f"Daily reminder completed: {sent_count}/{total_users} users notified")
             
             return {
                 'success': True,
                 'date': str(singapore_date),
                 'total_users': total_users,
                 'notifications_sent': sent_count,
-                'message': f'Ежедневная проверка завершена. Отправлено {sent_count} уведомлений {total_users} пользователям.'
+                'message': f'Daily reminder completed. Sent {sent_count} notifications to {total_users} users.'
             }
             
         except Exception as e:
-            logging.error(f"Ошибка ежедневной проверки: {e}")
+            logging.error(f"Daily reminder failed: {e}")
             return {
                 'success': False,
                 'error': str(e),
-                'message': 'Ошибка ежедневной проверки'
+                'message': 'Daily reminder failed'
             }
 
 class handler(BaseHTTPRequestHandler):
@@ -156,7 +147,7 @@ class handler(BaseHTTPRequestHandler):
             if not telegram_token:
                 self.send_response(500)
                 self.end_headers()
-                self.wfile.write(b'Отсутствует TELEGRAM_BOT_TOKEN')
+                self.wfile.write(b'Missing TELEGRAM_BOT_TOKEN')
                 return
             
             # Initialize reminder bot
@@ -169,16 +160,16 @@ class handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps(result, indent=2, ensure_ascii=False).encode('utf-8'))
+            self.wfile.write(json.dumps(result, indent=2).encode('utf-8'))
             
         except Exception as e:
-            logging.error(f"Ошибка конечной точки ежедневных напоминаний: {e}")
+            logging.error(f"Daily reminder endpoint error: {e}")
             self.send_response(500)
             self.end_headers()
             self.wfile.write(json.dumps({
                 'success': False,
                 'error': str(e)
-            }, ensure_ascii=False).encode('utf-8'))
+            }).encode('utf-8'))
     
     def do_GET(self):
         try:
@@ -187,12 +178,12 @@ class handler(BaseHTTPRequestHandler):
             current_time = datetime.now(singapore_tz)
             
             info = {
-                'status': 'Сервис ежедневных напоминаний запущен',
+                'status': 'Daily reminder service is running',
                 'current_singapore_time': current_time.strftime('%Y-%m-%d %H:%M:%S %Z'),
                 'next_8am': current_time.replace(hour=8, minute=0, second=0, microsecond=0),
                 'next_7pm': current_time.replace(hour=19, minute=0, second=0, microsecond=0),
                 'scheduled_times': ['08:00 SGT', '19:00 SGT'],
-                'endpoint': 'POST /api/daily-reminder для запуска напоминаний'
+                'endpoint': 'POST /api/daily-reminder to trigger reminders'
             }
             
             # Convert datetime objects to strings for JSON serialization
@@ -202,11 +193,11 @@ class handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps(info, indent=2, ensure_ascii=False).encode('utf-8'))
+            self.wfile.write(json.dumps(info, indent=2).encode('utf-8'))
             
         except Exception as e:
             self.send_response(500)
             self.end_headers()
             self.wfile.write(json.dumps({
                 'error': str(e)
-            }, ensure_ascii=False).encode('utf-8'))
+            }).encode('utf-8'))
